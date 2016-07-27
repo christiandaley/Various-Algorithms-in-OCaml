@@ -1,6 +1,10 @@
-open Int32;;
+open Bigarray;;
+open Array1;;
 
-let s_box =
+let uint8_t = Bigarray.Int8_unsigned;;
+let layout = Bigarray.C_layout;;
+
+let sbox = Array1.of_array uint8_t layout
   [|0x63; 0x7C; 0x77; 0x7B; 0xF2; 0x6B; 0x6F; 0xC5; 0x30; 0x01; 0x67; 0x2B; 0xFE; 0xD7; 0xAB; 0x76;
     0xCA; 0x82; 0xC9; 0x7D; 0xFA; 0x59; 0x47; 0xF0; 0xAD; 0xD4; 0xA2; 0xAF; 0x9C; 0xA4; 0x72; 0xC0;
     0xB7; 0xFD; 0x93; 0x26; 0x36; 0x3F; 0xF7; 0xCC; 0x34; 0xA5; 0xE5; 0xF1; 0x71; 0xD8; 0x31; 0x15;
@@ -18,7 +22,7 @@ let s_box =
     0xE1; 0xF8; 0x98; 0x11; 0x69; 0xD9; 0x8E; 0x94; 0x9B; 0x1E; 0x87; 0xE9; 0xCE; 0x55; 0x28; 0xDF;
     0x8C; 0xA1; 0x89; 0x0D; 0xBF; 0xE6; 0x42; 0x68; 0x41; 0x99; 0x2D; 0x0F; 0xB0; 0x54; 0xBB; 0x16 |];;
 
-let inv_s_box =
+let inv_sbox = Array1.of_array uint8_t layout
   [|0x52; 0x09; 0x6A; 0xD5; 0x30; 0x36; 0xA5; 0x38; 0xBF; 0x40; 0xA3; 0x9E; 0x81; 0xF3; 0xD7; 0xFB;
     0x7C; 0xE3; 0x39; 0x82; 0x9B; 0x2F; 0xFF; 0x87; 0x34; 0x8E; 0x43; 0x44; 0xC4; 0xDE; 0xE9; 0xCB;
     0x54; 0x7B; 0x94; 0x32; 0xA6; 0xC2; 0x23; 0x3D; 0xEE; 0x4C; 0x95; 0x0B; 0x42; 0xFA; 0xC3; 0x4E;
@@ -36,10 +40,12 @@ let inv_s_box =
     0xA0; 0xE0; 0x3B; 0x4D; 0xAE; 0x2A; 0xF5; 0xB0; 0xC8; 0xEB; 0xBB; 0x3C; 0x83; 0x53; 0x99; 0x61;
     0x17; 0x2B; 0x04; 0x7E; 0xBA; 0x77; 0xD6; 0x26; 0xE1; 0x69; 0x14; 0x63; 0x55; 0x21; 0x0C; 0x7D |];;
 
-let r_con = 
+let rcon = Array1.of_array uint8_t layout
   [| 0x00; 0x01; 0x02; 0x04; 0x08; 0x10; 0x20; 0x40; 0x80; 0x1b; 0x36 |];;
 
-let round_keys = Array.make 176 0;;
+let round_keys = Array1.create uint8_t layout 176;;
+
+let n_ROUNDS = 10;;
 
 let mult_x n =   
   if ((n land 0x80) != 0) then
@@ -64,186 +70,161 @@ let gf_mult x y =
   done;
 
   !result;;
-
+  
 let aes_key_init key =
   let word = Array.make 4 0 in
   for i = 0 to 15 do
-    Array.set round_keys i (Array.get key i);
+    round_keys.{i} <- key.{i};
   done;
 
-  for round = 1 to 10 do
+  for round = 1 to n_ROUNDS do
     for i = 0 to 3 do
-      Array.set word i (Array.get round_keys (16 * round - 4 + i));
+      Array.set word i round_keys.{16 * round - 4 + i};
     done;
-    let temp = Array.get s_box (Array.get word 0) in
-    Array.set word 0 ((Array.get s_box (Array.get word 1)) lxor (Array.get r_con round));
-    Array.set word 1 (Array.get s_box (Array.get word 2));
-    Array.set word 2 (Array.get s_box (Array.get word 3));
-    Array.set word 3 temp;
+
+    let temp = ref sbox.{Array.get word 0} in
+    Array.set word 0 ((sbox.{Array.get word 1}) lxor rcon.{round});
+    Array.set word 1 sbox.{Array.get word 2};
+    Array.set word 2 sbox.{Array.get word 3};
+    Array.set word 3 !temp;
 
     for i = 0 to 15 do
       let z =
         if i < 4 then
-          (Array.get word i) lxor (Array.get round_keys (16 * (round - 1) + i))
+          Array.get word i
         else
-          (Array.get round_keys (16 * round + i - 4)) lxor (Array.get round_keys (16 * (round - 1) + i))
-      in Array.set round_keys (16 * round + i) z;
+          round_keys.{16 * round + i - 4}
+
+      in round_keys.{16 * round + i} <- z lxor round_keys.{16 * (round - 1) + i};
     done;
   done;;
-
-let add_round_key state round = 
+  
+let add_round_key state round =
   for i = 0 to 15 do
-    Array.set state i ((Array.get state i) lxor (Array.get round_keys (round * 16 + i)))
+    state.{i} <- state.{i} lxor round_keys.{round * 16 + i};
   done;;
 
 let sub_bytes state =
   for i = 0 to 15 do
-    Array.set state i (Array.get s_box (Array.get state i))
+    state.{i} <- sbox.{state.{i}};
   done;;
 
-let shift_rows state = 
-  let temp = ref (Array.get state 1) in
-  Array.set state 1 (Array.get state 5);
-  Array.set state 5 (Array.get state 9);
-  Array.set state 9 (Array.get state 13);
-  Array.set state 13 !temp;
+let shift_rows state =
+  let temp = ref state.{1} in
+  state.{1} <- state.{5};
+  state.{5} <- state.{9};
+  state.{9} <- state.{13};
+  state.{13} <- !temp;
 
-  temp := Array.get state 2;
-  Array.set state 2 (Array.get state 10);
-  Array.set state 10 !temp;
-  temp := Array.get state 6;
-  Array.set state 6 (Array.get state 14);
-  Array.set state 14 !temp;
+  temp := state.{2};
+  state.{2} <- state.{10};
+  state.{10} <- !temp;
+  temp := state.{6};
+  state.{6} <- state.{14};
+  state.{14} <- !temp;
 
-  temp := Array.get state 15;
-  Array.set state 15 (Array.get state 11);
-  Array.set state 11 (Array.get state 7);
-  Array.set state 7 (Array.get state 3);
-  Array.set state 3 !temp;;
+  temp := state.{15};
+  state.{15} <- state.{11};
+  state.{11} <- state.{7};
+  state.{7} <- state.{3};
+  state.{3} <- !temp;;
 
 let mix_columns state =
-  let output = Array.make 16 0
-  and mult2 = Array.make 16 0
-  and mult3 = Array.make 16 0 in
+  let output = Array1.create uint8_t layout 16
+  and mult2 = Array1.create uint8_t layout 16
+  and mult3 = Array1.create uint8_t layout 16 in
   for i = 0 to 15 do
-    Array.set output i (Array.get state i);
-    Array.set mult2 i (mult_x (Array.get state i));
-    Array.set mult3 i (gf_mult (Array.get state i) 3);
+    output.{i} <- state.{i};
+    mult2.{i} <- mult_x state.{i};
+    mult3.{i} <- gf_mult state.{i} 3;
   done;
 
   for i = 0 to 3 do
-    Array.set output (i * 4) ((Array.get mult2 (i * 4)) lxor (Array.get mult3 (i * 4 + 1)) lxor (Array.get state (i * 4 + 2)) lxor (Array.get state (i * 4 + 3)));
-    Array.set output (i * 4 + 1) ((Array.get state (i * 4)) lxor (Array.get mult2 (i * 4 + 1)) lxor (Array.get mult3 (i * 4 + 2)) lxor (Array.get state (i * 4 + 3)));
-    Array.set output (i * 4 + 2) ((Array.get state (i * 4)) lxor (Array.get state (i * 4 + 1)) lxor (Array.get mult2 (i * 4 + 2)) lxor (Array.get mult3 (i * 4 + 3)));
-    Array.set output (i * 4 + 3) ((Array.get mult3 (i * 4)) lxor (Array.get state (i * 4 + 1)) lxor (Array.get state (i * 4 + 2)) lxor (Array.get mult2 (i * 4 + 3))); 
+    output.{i * 4} <- mult2.{i * 4} lxor mult3.{i * 4 + 1} lxor state.{i * 4 + 2} lxor state.{i * 4 + 3};
+    output.{i * 4 + 1} <- state.{i * 4} lxor mult2.{i * 4 + 1} lxor mult3.{i * 4 + 2} lxor state.{i * 4 + 3};
+    output.{i * 4 + 2} <- state.{i * 4} lxor state.{i * 4 + 1} lxor mult2.{i * 4 + 2} lxor mult3.{i * 4 + 3};
+    output.{i * 4 + 3} <- mult3.{i * 4} lxor state.{i * 4 + 1} lxor state.{i * 4 + 2} lxor mult2.{i * 4 + 3};
   done;
 
   for i = 0 to 15 do
-    Array.set state i (Array.get output i);
+    state.{i} <- output.{i};
   done;;
 
 let inv_sub_bytes state =
   for i = 0 to 15 do
-    Array.set state i (Array.get inv_s_box (Array.get state i))
+    state.{i} <- inv_sbox.{state.{i}};
   done;;
 
 let inv_shift_rows state =
-  let temp = ref (Array.get state 13) in
-  Array.set state 13 (Array.get state 9);
-  Array.set state 9 (Array.get state 5);
-  Array.set state 5 (Array.get state 1);
-  Array.set state 1 !temp;
+  let temp = ref state.{13} in
+  state.{13} <- state.{9};
+  state.{9} <- state.{5};
+  state.{5} <- state.{1};
+  state.{1} <- !temp;
 
-  temp := Array.get state 2;
-  Array.set state 2 (Array.get state 10);
-  Array.set state 10 !temp;
-  temp := Array.get state 6;
-  Array.set state 6 (Array.get state 14);
-  Array.set state 14 !temp;
+  temp := state.{2};
+  state.{2} <- state.{10};
+  state.{10} <- !temp;
+  temp := state.{6};
+  state.{6} <- state.{14};
+  state.{14} <- !temp;
 
-  temp := Array.get state 3;
-  Array.set state 3 (Array.get state 7);
-  Array.set state 7 (Array.get state 11);
-  Array.set state 11 (Array.get state 15);
-  Array.set state 15 !temp;;
+  temp := state.{3};
+  state.{3} <- state.{7};
+  state.{7} <- state.{11};
+  state.{11} <- state.{15};
+  state.{15} <- !temp;;
 
 let inv_mix_columns state =
-  let mult9 = Array.make 16 0
-  and mult11 = Array.make 16 0
-  and mult13 = Array.make 16 0
-  and mult14 = Array.make 16 0 in
+  let mult9 = Array1.create uint8_t layout 16
+  and mult11 = Array1.create uint8_t layout 16
+  and mult13 = Array1.create uint8_t layout 16
+  and mult14 = Array1.create uint8_t layout 16 in
   for i = 0 to 15 do
-    Array.set mult9 i (gf_mult (Array.get state i) 9);
-    Array.set mult11 i (gf_mult (Array.get state i) 11);
-    Array.set mult13 i (gf_mult (Array.get state i) 13);
-    Array.set mult14 i (gf_mult (Array.get state i) 14);
+    mult9.{i} <- gf_mult state.{i} 9;
+    mult11.{i} <- gf_mult state.{i} 11;
+    mult13.{i} <- gf_mult state.{i} 13;
+    mult14.{i} <- gf_mult state.{i} 14;
   done;
 
   for i = 0 to 3 do
-    Array.set state (i * 4) ((Array.get mult14 (i * 4)) lxor (Array.get mult11 (i * 4 + 1)) lxor (Array.get mult13 (i * 4 + 2)) lxor (Array.get mult9 (i * 4 + 3)));
-    Array.set state (i * 4 + 1) ((Array.get mult9 (i * 4)) lxor (Array.get mult14 (i * 4 + 1)) lxor (Array.get mult11 (i *4 + 2)) lxor (Array.get mult13 (i * 4 + 3)));
-    Array.set state (i * 4 + 2) ((Array.get mult13 (i * 4)) lxor (Array.get mult9 (i * 4 + 1)) lxor (Array.get mult14 (i *4 + 2)) lxor (Array.get mult11 (i * 4 + 3)));
-    Array.set state (i * 4 + 3) ((Array.get mult11 (i * 4)) lxor (Array.get mult13 (i * 4 + 1)) lxor (Array.get mult9 (i *4 + 2)) lxor (Array.get mult14 (i * 4 + 3))); 
+    state.{i * 4} <- mult14.{i * 4} lxor mult11.{i * 4 + 1} lxor mult13.{i * 4 + 2} lxor mult9.{i * 4 + 3};
+    state.{i * 4 + 1} <- mult9.{i * 4} lxor mult14.{i * 4 + 1} lxor mult11.{i * 4 + 2} lxor mult13.{i * 4 + 3};
+    state.{i * 4 + 2} <- mult13.{i * 4} lxor mult9.{i * 4 + 1} lxor mult14.{i * 4 + 2} lxor mult11.{i * 4 + 3};
+    state.{i * 4 + 3} <- mult11.{i * 4} lxor mult13.{i * 4 + 1} lxor mult9.{i * 4 + 2} lxor mult14.{i * 4 + 3};
   done;;
 
-let expand_state input =
-  let state = Array.make 16 0 in
-  for i = 0 to 3 do
-    Array.set state (i * 4) (Int32.to_int (Int32.logand (Array.get input i) (Int32.of_int 0xff)));
-    Array.set state (i * 4 + 1) (Int32.to_int (Int32.logand (Int32.shift_right_logical (Array.get input i) 8) (Int32.of_int 0xff)));
-    Array.set state (i * 4 + 2) (Int32.to_int (Int32.logand (Int32.shift_right_logical (Array.get input i) 16) (Int32.of_int 0xff)));
-    Array.set state (i * 4 + 3) (Int32.to_int (Int32.logand (Int32.shift_right_logical (Array.get input i) 24) (Int32.of_int 0xff)));
-  done;
-  state;;
-
-let shrink_state state = 
-  let output = Array.make 4 (Int32.of_int 0) in
-  for i = 0 to 3 do
-    let t0 = Int32.of_int (Array.get state 0);
-    and t1 = Int32.shift_left (Int32.of_int (Array.get state 1)) 8;
-    and t2 = Int32.shift_left (Int32.of_int (Array.get state 2)) 16;
-    and t3 = Int32.shift_left (Int32.of_int (Array.get state 3)) 24;
-    in
-    let z = Int32.logxor (Int32.logxor (Int32.logxor t0 t1) t2) t3 in
-    Array.set output i z;
-  done;
-  output;;
-
-let aes_128_enc pt ct key =
-  let state = expand_state pt in
-  aes_key_init key;
-  add_round_key state 0;
-  for round = 1 to 9 do
-    sub_bytes state;
-    shift_rows state;
-    mix_columns state;
-    add_round_key state round;
-  done;
-
-  sub_bytes state;
-  shift_rows state;
-  add_round_key state 10;
-  let output = shrink_state state in
-  for i = 0 to 3 do
-    Array.set ct i (Array.get output i);
-  done;;
-
-let aes_128_dec ct pt key =
-  let state = expand_state ct in
-  aes_key_init key;
-  add_round_key state 10;
-  inv_shift_rows state;
-  inv_sub_bytes state;
-  
-  for round = 9 to 1 do
-    add_round_key state round;
-    inv_mix_columns state;
-    inv_shift_rows state;
-    inv_sub_bytes state;
+let aes_128_enc pt ct =
+  for i = 0 to 15 do
+    ct.{i} <- pt.{i};
   done;
   
-    add_round_key state 0;
-    let output = shrink_state state in
-    for i = 0 to 3 do
-      Array.set pt i (Array.get output i);
-    done;;
+  add_round_key ct 0;
+  
+  for round = 1 to (n_ROUNDS - 1) do
+    sub_bytes ct;
+    shift_rows ct;
+    mix_columns ct;
+    add_round_key ct round;
+  done;
+
+  sub_bytes ct;
+  shift_rows ct;
+  add_round_key ct 10;;
+
+let aes_128_dec ct pt =
+  for i = 0 to 15 do
+    pt.{i} <- ct.{i};
+  done;
+  add_round_key pt 10;
+  inv_shift_rows pt;
+  inv_sub_bytes pt;
+
+  for round = 1 to (n_ROUNDS - 1) do
+    add_round_key pt (10 - round);
+    inv_mix_columns pt;
+    inv_shift_rows pt;
+    inv_sub_bytes pt;
+  done;
+
+  add_round_key pt 0;
